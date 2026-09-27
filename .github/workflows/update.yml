@@ -1,0 +1,42 @@
+# Follows FastBG's latest release: when there's a newer version, points the cask at its disk image, with the checksum
+# worked out from the image itself rather than taken on trust.
+name: update
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # commits the new version
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Follow the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(gh release view -R heathdutton/FastBG --json tagName -q .tagName)
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected tag $version"; exit 1; }
+          current=$(sed -nE 's/^  version "(.*)"$/\1/p' Casks/fastbg.rb)
+          if [[ $version == "$current" ]]; then echo "already $version"; exit 0; fi
+          gh release download "$version" -R heathdutton/FastBG -p "fastbg-$version.dmg" -D "$RUNNER_TEMP"
+          sha=$(sha256sum "$RUNNER_TEMP/fastbg-$version.dmg" | cut -d' ' -f1)
+          sed -i -E "s/^  version \".*\"$/  version \"$version\"/; s/^  sha256 \".*\"$/  sha256 \"$sha\"/" Casks/fastbg.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "Update FastBG to $version"
+          # gh hands git the token as a credential helper, so it never lands in the checkout's config.
+          gh auth setup-git
+          git push -q
